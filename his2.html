@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <title>Hospital FHIR Connector</title>
+  <style>
+    body { font-family: sans-serif; margin: 2em; }
+    input, button, select { margin: 0.5em 0; padding: 0.5em; }
+    table { width: 100%; margin-top: 1em; border-collapse: collapse; }
+    th, td { border: 1px solid #ccc; padding: 0.5em; text-align: left; }
+    button.action { margin-right: 0.3em; }
+    a { color: blue; text-decoration: underline; cursor: pointer; }
+    #patientDetails { border: 1px solid #ddd; padding: 1em; margin-top: 1em; background: #f9f9f9; }
+  </style>
+</head>
+<body>
+<h1>HIS2</h1>
+<h2>🏥 รายชื่อคนไข้ (FHIR Patients)</h2>
+<button onclick="loadPatients()">โหลดรายชื่อ</button>
+<table id="patientTable">
+  <thead>
+    <tr>
+      <th>ID</th><th>ชื่อ</th><th>เพศ</th><th>วันเกิด</th><th>เวอร์ชัน</th><th>action</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<div id="patientDetails"></div>
+
+<hr>
+
+<h3 id="formTitle">➕ เพิ่มคนไข้</h3>
+<input id="firstName" placeholder="ชื่อจริง">
+<input id="lastName" placeholder="นามสกุล">
+<input id="birthDate" type="date">
+<select id="gender">
+  <option value="male">ชาย</option>
+  <option value="female">หญิง</option>
+</select>
+<br>
+<button onclick="addOrUpdatePatient()">💾 บันทึก</button>
+<button onclick="resetForm()">🔄 ล้างฟอร์ม</button>
+
+<script>
+const FHIR_BASE = 'http://localhost:8080/fhir'; 
+let editingPatientId = null;
+let currentPatientResource = null;
+
+function loadPatients() {
+  fetch(`${FHIR_BASE}/Patient?_count=20`)
+    .then(res => res.json())
+    .then(data => {
+      const tbody = document.querySelector("#patientTable tbody");
+      tbody.innerHTML = "";
+      if (data.entry) {
+        data.entry.forEach(entry => {
+          const p = entry.resource;
+          const name = p.name?.[0]?.given?.join(" ") + " " + p.name?.[0]?.family;
+          const gender = p.gender || "-";
+          const birth = p.birthDate || "-";
+          const version = p.meta?.versionId || "-";
+          const nameHtml = `<a href="#" onclick="viewPatient('${p.id}')">${name}</a>`;
+          const row = `
+            <tr>
+              <td>${p.id}</td>
+              <td>${nameHtml}</td>
+              <td>${gender}</td>
+              <td>${birth}</td>
+              <td>${version}</td>
+              <td>
+                <button class="action" onclick="editPatient('${p.id}')">📝 แก้ไข</button>
+                <button class="action" onclick="deletePatient('${p.id}')">🗑️ ลบ</button>
+              </td>
+            </tr>`;
+          tbody.insertAdjacentHTML('beforeend', row);
+        });
+      }
+    });
+}
+
+function addOrUpdatePatient() {
+  const fName = document.getElementById("firstName").value.trim();
+  const lName = document.getElementById("lastName").value.trim();
+  const birth = document.getElementById("birthDate").value;
+  const gender = document.getElementById("gender").value;
+
+  let patient;
+
+  if (editingPatientId && currentPatientResource) {
+    patient = {
+      ...currentPatientResource,
+      name: [{ use: "official", family: lName, given: [fName] }],
+      gender: gender,
+      birthDate: birth
+    };
+  } else {
+    patient = {
+      resourceType: "Patient",
+      name: [{ use: "official", family: lName, given: [fName] }],
+      gender: gender,
+      birthDate: birth
+    };
+  }
+
+  const method = editingPatientId ? "PUT" : "POST";
+  const url = editingPatientId ? `${FHIR_BASE}/Patient/${editingPatientId}` : `${FHIR_BASE}/Patient`;
+
+  fetch(url, {
+    method: method,
+    headers: { "Content-Type": "application/fhir+json" },
+    body: JSON.stringify(patient)
+  }).then(async res => {
+    if (res.ok) {
+      alert(editingPatientId ? "แก้ไขข้อมูลสำเร็จ" : "เพิ่มคนไข้สำเร็จ");
+      resetForm();
+      loadPatients();
+    } else {
+      const text = await res.text();
+      console.error("⛔️ PUT/POST error:", text);
+      alert("เกิดข้อผิดพลาดในการบันทึกข้อมูล:\n" + text);
+    }
+  });
+}
+
+function editPatient(id) {
+  fetch(`${FHIR_BASE}/Patient/${id}`)
+    .then(res => res.json())
+    .then(p => {
+      currentPatientResource = p;
+      document.getElementById("firstName").value = p.name?.[0]?.given?.[0] || "";
+      document.getElementById("lastName").value = p.name?.[0]?.family || "";
+      document.getElementById("birthDate").value = p.birthDate || "";
+      document.getElementById("gender").value = p.gender || "male";
+      editingPatientId = id;
+      document.getElementById("formTitle").textContent = "✏️ แก้ไขคนไข้";
+    });
+}
+
+function deletePatient(id) {
+  if (confirm("คุณต้องการลบข้อมูลคนไข้หรือไม่?")) {
+    fetch(`${FHIR_BASE}/Patient/${id}`, {
+      method: "DELETE"
+    }).then(res => {
+      if (res.ok) {
+        alert("ลบข้อมูลสำเร็จ");
+        loadPatients();
+      } else {
+        alert("เกิดข้อผิดพลาดในการลบข้อมูล");
+      }
+    });
+  }
+}
+
+function viewPatient(id) {
+  fetch(`${FHIR_BASE}/Patient/${id}`)
+    .then(res => res.json())
+    .then(p => {
+      const detailDiv = document.getElementById("patientDetails");
+      const name = p.name?.[0]?.given?.join(" ") + " " + p.name?.[0]?.family;
+      const gender = p.gender || "-";
+      const birth = p.birthDate || "-";
+      const telecom = (p.telecom || []).map(t => `${t.system}: ${t.value}`).join(", ");
+
+      detailDiv.innerHTML = `
+        <h3>📋 รายละเอียดคนไข้</h3>
+        <p><strong>ชื่อ:</strong> ${name}</p>
+        <p><strong>เพศ:</strong> ${gender}</p>
+        <p><strong>วันเกิด:</strong> ${birth}</p>
+        <p><strong>ติดต่อ:</strong> ${telecom || '-'}</p>
+        <p><strong>ID:</strong> ${p.id}</p>
+        <hr>
+      `;
+    });
+}
+
+function resetForm() {
+  document.getElementById("firstName").value = "";
+  document.getElementById("lastName").value = "";
+  document.getElementById("birthDate").value = "";
+  document.getElementById("gender").value = "male";
+  editingPatientId = null;
+  currentPatientResource = null;
+  document.getElementById("formTitle").textContent = "➕ เพิ่มคนไข้";
+}
+</script>
+
+</body>
+</html>
